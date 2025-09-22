@@ -1,0 +1,35 @@
+cucp:
+  node_id: 0xe00
+  node_name: "gNB-CU-CP"
+  plmn:
+    mcc: "208"
+    mnc: "93"
+    mnc_length: 2
+
+f1ap:
+  local_address: "127.0.0.1"
+  local_port: 38472
+  sctp:
+    in_streams: 2
+    out_streams: 2
+  timers:
+    f1_setup_timer: "10s"
+
+e1ap:
+  local_address: "127.0.0.1"
+  local_port: 38462
+  sctp:
+    in_streams: 2
+    out_streams: 2
+
+ngap:
+  amf_address: "127.0.0.1"
+  amf_port: 38412
+  local_address: "127.0.0.1"
+  sctp:
+    in_streams: 2
+    out_streams: 2
+
+logging:
+  level: "info"
+  format: "json"
