@@ -1,13 +1,8 @@
 package context
 
 import (
-	"central-unit/internal/transport"
-	"fmt"
-
 	f1ap "github.com/JocelynWS/f1-gen"
 	"github.com/JocelynWS/f1-gen/ies"
-	"github.com/alitto/pond/v2"
-	"github.com/ishidawataru/sctp"
 	"github.com/lvdund/ngap/aper"
 )
 
@@ -69,63 +64,6 @@ func (cu *CuCpContext) dispatchF1(rawMsg []byte) {
 	default:
 		cu.Warn("Received F1AP message with unknown present type %d", pdu.Present)
 	}
-}
-
-// initF1APServer initializes the SCTP server for F1AP (DU connections)
-func (cu *CuCpContext) initF1APServer() error {
-	ipList := []string{cu.ControlInfo.gnbIp}
-	port := 38472
-
-	// Create connection handler for new DU connections
-	onNewConnection := func(conn *sctp.SCTPConn) {
-		cu.Info("New DU connection")
-
-		// Create worker pool for DU message processing
-		p_du := pond.NewPool(100)
-		// Set up message reading loop - read directly from SCTP connection
-		go func() {
-			buf := make([]byte, 8192)
-			for {
-				n, info, err := conn.SCTPRead(buf)
-				if err != nil {
-					// if err == io.EOF || err == io.ErrUnexpectedEOF {
-					// 	cu.Info("DU connection closed", "assoc_id", assocId)
-					// } else {
-					// 	cu.Error("Error reading from DU connection: %v", err)
-					// }
-					// cu.DuConnPool.Delete(assocId)
-					return
-				}
-
-				// Check PPID
-				if info == nil || info.PPID != transport.F1AP_PPID {
-					cu.Warn("Received SCTP message with wrong PPID, discarding")
-					continue
-				}
-
-				// Copy message data
-				rawMsg := make([]byte, n)
-				copy(rawMsg, buf[:n])
-
-				// Dispatch message
-				p_du.Submit(func() { cu.dispatchF1(rawMsg) })
-			}
-		}()
-
-		cu.Info("DU connection handler started")
-	}
-
-	// Create and start F1AP SCTP server
-	server := transport.NewF1APServer(ipList, port, onNewConnection)
-
-	if err := server.Run(); err != nil {
-		return fmt.Errorf("start F1AP SCTP server: %w", err)
-	}
-
-	// Store server reference (you may want to add this to ControlInfo)
-	// cu.ControlInfo.f1apServer = server
-
-	return nil
 }
 
 // plmnMatches checks if two PLMN byte arrays match

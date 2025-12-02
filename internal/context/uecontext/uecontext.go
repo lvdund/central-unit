@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/lvdund/asn1go/uper"
 	"github.com/lvdund/ngap/aper"
 	"github.com/lvdund/ngap/ies"
 	"github.com/lvdund/ngap/utils"
@@ -41,7 +40,7 @@ type GNBUe struct {
 	RrcUeId            uint64
 	DuId               uint64
 	DuUeId             uint64
-	Tmsi5gs_part1      *uper.BitString
+	Tmsi5gs_part1      *aper.BitString
 	Tmsi5gs            *ies.FiveGSTMSI
 	Rnti               int64
 	Random_ue_identity []byte

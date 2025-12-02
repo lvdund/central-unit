@@ -1,9 +1,7 @@
 package context
 
 import (
-	"bytes"
 	"central-unit/internal/common/utils"
-	"central-unit/internal/context/amfcontext"
 	"central-unit/internal/context/du"
 	"central-unit/internal/context/uecontext"
 	"fmt"
@@ -11,7 +9,7 @@ import (
 	f1ap "github.com/JocelynWS/f1-gen"
 	"github.com/JocelynWS/f1-gen/ies"
 	f1ies "github.com/JocelynWS/f1-gen/ies"
-	"github.com/lvdund/asn1go/uper"
+	asn1aper "github.com/lvdund/asn1go/aper"
 	"github.com/lvdund/ngap"
 	"github.com/lvdund/ngap/aper"
 	ngapies "github.com/lvdund/ngap/ies"
@@ -25,51 +23,62 @@ func (cu *CuCpContext) handleRRCSetupRequest(
 	rrcSetupRequest *rrcies.RRCSetupRequest_IEs,
 	f1apMsg *ies.InitialULRRCMessageTransfer,
 ) error {
+	cu.Info("handle RRC Setup Request")
 	var ue *uecontext.GNBUe
 	var err error
 
-	if rrcSetupRequest.Ue_Identity.Choice == rrcies.InitialUE_Identity_Choice_RandomValue {
-		ue = cu.createUE(duCtx.DuId, f1apMsg.CRNTI, uper.BitString{}, f1apMsg.GNBDUUEF1APID)
-	} else if rrcSetupRequest.Ue_Identity.Choice == rrcies.InitialUE_Identity_Choice_Ng_5G_S_TMSI_Part1 {
+	switch rrcSetupRequest.Ue_Identity.Choice {
+	case rrcies.InitialUE_Identity_Choice_RandomValue:
+		ue = cu.createUE(duCtx.DuId, f1apMsg.CRNTI, asn1aper.BitString{}, f1apMsg.GNBDUUEF1APID)
+	case rrcies.InitialUE_Identity_Choice_Ng_5G_S_TMSI_Part1:
 		ue = cu.createUE(duCtx.DuId, f1apMsg.CRNTI, rrcSetupRequest.Ue_Identity.Ng_5G_S_TMSI_Part1, f1apMsg.GNBDUUEF1APID)
-		ue.Tmsi5gs_part1 = &rrcSetupRequest.Ue_Identity.Ng_5G_S_TMSI_Part1
-	} else {
-		ue = cu.createUE(duCtx.DuId, f1apMsg.CRNTI, uper.BitString{}, f1apMsg.GNBDUUEF1APID)
+		ue.Tmsi5gs_part1 = (*aper.BitString)(&rrcSetupRequest.Ue_Identity.Ng_5G_S_TMSI_Part1)
+	default:
+		ue = cu.createUE(duCtx.DuId, f1apMsg.CRNTI, asn1aper.BitString{}, f1apMsg.GNBDUUEF1APID)
 		//TODO: rrc setup reject
+		return fmt.Errorf("invalid UE identity choice")
 	}
 
 	if f1apMsg.DUtoCURRCContainer == nil {
 		//TODO: rrc setup reject
 		return fmt.Errorf("DUtoCURRCContainer nil")
+	} else {
+		rrc_temp := rrcies.CellGroupConfig{}
+		err = rrc.Decode(f1apMsg.DUtoCURRCContainer, &rrc_temp)
+		if err != nil {
+			return err
+		}
+		ue.MasterCellGroup = &rrc_temp
 	}
-	//TODO: decode DUtoCURRCContainer -> cellGroupConfig type
-	rrc_temp, err := rrc.Decode(f1apMsg.DUtoCURRCContainer)
-	if err != nil {
-		return err
-	}
-
 	ue.EstablishmentCause = &rrcSetupRequest.EstablishmentCause
 	ue.NrCellId = &f1apMsg.NRCGI.NRCellIdentity
-	ue.MasterCellGroup = rrc_temp.(*rrcies.CellGroupConfig)
 
 	// Send RRC Setup -> DU
-	rrcmsg := rrcies.RRCSetup{
-		Rrc_TransactionIdentifier: rrcies.RRC_TransactionIdentifier{
-			Value: 0,
-		},
-		CriticalExtensions: rrcies.RRCSetup_CriticalExtensions{
-			Choice: rrcies.RRCSetup_CriticalExtensions_Choice_RrcSetup,
-			RrcSetup: &rrcies.RRCSetup_IEs{
-				RadioBearerConfig: rrcies.RadioBearerConfig{
-					Srb_ToAddModList: &rrcies.SRB_ToAddModList{
-						Value: []rrcies.SRB_ToAddMod{rrcies.SRB_ToAddMod{
-							Srb_Identity: rrcies.SRB_Identity{
-								Value: 1,
+	rrcmsg := rrcies.DL_CCCH_Message{
+		Message: rrcies.DL_CCCH_MessageType{
+			Choice: rrcies.DL_CCCH_MessageType_Choice_C1,
+			C1: &rrcies.DL_CCCH_MessageType_C1{
+				Choice: rrcies.DL_CCCH_MessageType_C1_Choice_RrcSetup,
+				RrcSetup: &rrcies.RRCSetup{
+					Rrc_TransactionIdentifier: rrcies.RRC_TransactionIdentifier{
+						Value: 0,
+					},
+					CriticalExtensions: rrcies.RRCSetup_CriticalExtensions{
+						Choice: rrcies.RRCSetup_CriticalExtensions_Choice_RrcSetup,
+						RrcSetup: &rrcies.RRCSetup_IEs{
+							RadioBearerConfig: rrcies.RadioBearerConfig{
+								Srb_ToAddModList: &rrcies.SRB_ToAddModList{
+									Value: []rrcies.SRB_ToAddMod{rrcies.SRB_ToAddMod{
+										Srb_Identity: rrcies.SRB_Identity{
+											Value: 1,
+										},
+									}},
+								},
 							},
-						}},
+							MasterCellGroup: f1apMsg.DUtoCURRCContainer,
+						},
 					},
 				},
-				MasterCellGroup: f1apMsg.DUtoCURRCContainer,
 			},
 		},
 	}
@@ -84,17 +93,20 @@ func (cu *CuCpContext) handleRRCSetupRequest(
 		GNBDUUEF1APID:        int64(ue.DuUeId),
 		SRBID:                0, //= 0 (SRB0, used before SRB1 is established)
 		RRCContainer:         rrcSetupBytes,
+		ExecuteDuplication:   &f1ies.ExecuteDuplication{Value: 0},
 		RedirectedRRCmessage: []byte{0}, //FIX: Now lib F1AP is wrong in this field
 	}
 
-	// Encode F1AP message
-	var buf bytes.Buffer
-	if err := dlRrcMsg.Encode(&buf); err != nil {
-		return fmt.Errorf("encode DL RRC Message Transfer: %w", err)
+	f1apBytes, err := f1ap.F1apEncode(&dlRrcMsg)
+	if err != nil {
+		cu.Error("failed to encode DL RRC Message Transfer: %v", err)
+		return fmt.Errorf("failed to encode DL RRC Message Transfer: %v", err)
 	}
 
+	cu.Info("Send RrcSetup to DU %d", duCtx.DuId)
+
 	// Send via SCTP to DU
-	return duCtx.SendF1ap(buf.Bytes())
+	return duCtx.SendF1ap(f1apBytes)
 }
 
 func (cu *CuCpContext) handleRrcSetupComplete(
@@ -102,31 +114,32 @@ func (cu *CuCpContext) handleRrcSetupComplete(
 	msg *rrcies.RRCSetupComplete,
 ) error {
 	var tmsi5gs []byte
+	var err error
 	tmsi := msg.CriticalExtensions.RrcSetupComplete.Ng_5G_S_TMSI_Value
 	if tmsi != nil {
-		if tmsi.Choice ==
-			rrcies.RRCSetupComplete_IEs_ng_5G_S_TMSI_Value_Choice_Ng_5G_S_TMSI_Part2 &&
+		if tmsi.Choice == rrcies.RRCSetupComplete_IEs_ng_5G_S_TMSI_Value_Choice_Ng_5G_S_TMSI_Part2 &&
 			ue.Tmsi5gs_part1 != nil {
-			tmsi5gs = utils.Build5GSTMSI(
-				aper.BitString(tmsi.Ng_5G_S_TMSI_Part2),
-				aper.BitString(*ue.Tmsi5gs_part1))
+			tmsi5gs = utils.Build5GSTMSI(aper.BitString(tmsi.Ng_5G_S_TMSI_Part2), aper.BitString(*ue.Tmsi5gs_part1))
 		} else if tmsi.Choice ==
 			rrcies.RRCSetupComplete_IEs_ng_5G_S_TMSI_Value_Choice_Ng_5G_S_TMSI {
 			tmsi5gs = tmsi.Ng_5G_S_TMSI.Value.Bytes
 		}
 
-		ue.Tmsi5gs = utils.Decode5GSTMSI(tmsi5gs)
-		ue.Random_ue_identity = tmsi5gs
+		if len(tmsi5gs) > 0 {
+			ue.Tmsi5gs, err = utils.Decode5GSTMSI(tmsi5gs)
+			if err != nil {
+				return fmt.Errorf("failed to decode 5G-S-TMSI: %w", err)
+			}
+			ue.Random_ue_identity = tmsi5gs
+		}
 	}
 
 	ue.State = uecontext.UE_INITIALIZED
 
-	amf, ok := cu.AmfPool.Load(0) //WARN: now fix id amf = 0
-	if !ok {
-		return fmt.Errorf("cannot load amf")
-	}
-	cu.SendNasPdu(msg.CriticalExtensions.RrcSetupComplete.DedicatedNAS_Message.Value, ue, amf.(*amfcontext.GNBAmf))
-	return nil
+	cu.Info("Send NAS Registration Request to AMF")
+	amf := cu.AMF
+	cu.SendNasPdu(msg.CriticalExtensions.RrcSetupComplete.DedicatedNAS_Message.Value, ue, amf)
+	return err
 }
 
 func (cu *CuCpContext) handleULInformationTransfer(
@@ -134,11 +147,12 @@ func (cu *CuCpContext) handleULInformationTransfer(
 	ulInformationTransfer *rrcies.ULInformationTransfer,
 ) error {
 	ue.State = uecontext.UE_ONGOING
-	amf, ok := cu.AmfPool.Load(0) //WARN: now fix id amf = 0
-	if !ok {
-		return fmt.Errorf("cannot load amf")
-	}
-	cu.SendNasPdu(ulInformationTransfer.CriticalExtensions.UlInformationTransfer.DedicatedNAS_Message.Value, ue, amf.(*amfcontext.GNBAmf))
+	// amf, ok := cu.AmfPool.Load(0) //WARN: now fix id amf = 0
+	// if !ok {
+	// 	return fmt.Errorf("cannot load amf")
+	// }
+	amf := cu.AMF
+	cu.SendNasPdu(ulInformationTransfer.CriticalExtensions.UlInformationTransfer.DedicatedNAS_Message.Value, ue, amf)
 	return nil
 }
 
@@ -153,7 +167,7 @@ func (cu *CuCpContext) handleRRCSecurityModeComplete(
 		GNBDUUEF1APID: &duUeId,
 		SpCellID: f1ies.NRCGI{
 			PLMNIdentity:   cu.GetMccAndMncInOctets(),
-			NRCellIdentity: *ue.NrCellId,
+			NRCellIdentity: aper.BitString(*ue.NrCellId),
 		},
 		ServCellIndex: 0,
 		CUtoDURRCInformation: &f1ies.CUtoDURRCInformation{
@@ -180,8 +194,9 @@ func (cu *CuCpContext) handleRRCSecurityModeComplete(
 		return fmt.Errorf("failed to encode UE Context Setup Request: %w", err)
 	}
 
-	duCtx, _ := cu.DuPool.Load(ue.DuUeId)
-	err = duCtx.(*du.GNBDU).SendF1ap(f1apBytes)
+	// duCtx, _ := cu.DuPool.Load(ue.DuUeId)
+	duCtx := cu.DU
+	err = duCtx.SendF1ap(f1apBytes)
 	if err != nil {
 		return fmt.Errorf("failed to send UE Context Setup Request: %w", err)
 	}
@@ -205,12 +220,12 @@ func (cu *CuCpContext) handleRRCReconfigurationComplete(
 		return fmt.Errorf("failed to encode Initial Context Setup Response: %w", err)
 	}
 
-	amf, ok := cu.AmfPool.Load(0) //WARN: now fix id amf = 0
-	if !ok {
-		return fmt.Errorf("cannot load amf")
-	}
-
-	err = amf.(*amfcontext.GNBAmf).SendNgap(ngapBytes)
+	// amf, ok := cu.AmfPool.Load(0) //WARN: now fix id amf = 0
+	// if !ok {
+	// 	return fmt.Errorf("cannot load amf")
+	// }
+	amf := cu.AMF
+	err = amf.SendNgap(ngapBytes)
 	if err != nil {
 		return fmt.Errorf("failed to send NGAP Initial Context Setup Response: %w", err)
 	}

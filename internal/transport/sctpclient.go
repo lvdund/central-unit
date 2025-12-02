@@ -4,29 +4,20 @@ import (
 	"central-unit/internal/common/logger"
 	"context"
 	"fmt"
+	"io"
 	"sync"
+	"syscall"
 	"time"
 
-	"github.com/alitto/pond/v2"
 	"github.com/ishidawataru/sctp"
 )
 
 const (
-	payloadSize                      = 65535
-	requestTimeout                   = 2 * time.Second
-	sctpDefaultNumOstreams           = 5
-	sctpDefaultMaxInstreams          = 3
-	sctpDefaultMaxAttempts           = 2
-	sctpDefaultMaxInitTimeout        = 2
-	defaultChannelBuffer             = 5000
-	NGAP_PPID                 uint32 = 60
+	NGAP_PPID            uint32 = 60
+	readBufferSize              = 8192
+	defaultChannelBuffer        = 5000
+	requestTimeout              = 2 * time.Second
 )
-
-var bufferPool = sync.Pool{
-	New: func() any {
-		return make([]byte, payloadSize)
-	},
-}
 
 type SctpConn struct {
 	gnbId      string
@@ -34,20 +25,13 @@ type SctpConn struct {
 	remoteAddr string
 	conn       *sctp.SCTPConn
 
-	// Channels for reading & Worker configuration
-	ReadCh       chan []byte
-	readWorkers  int
-	writeWorkers pond.Pool
+	// Channel for reading
+	ReadCh chan []byte
 
 	// Control
 	*logger.Logger
-	Timeout time.Duration
-	ctx     context.Context
-	wg      sync.WaitGroup
-
-	// Mutexes to protect SCTP connection calls
-	readMutex  sync.Mutex
-	writeMutex sync.Mutex
+	ctx context.Context
+	wg  sync.WaitGroup
 }
 
 func NewSctpConn(gnbid, localAddr, remoteAddr string, ctx context.Context) *SctpConn {
@@ -59,14 +43,9 @@ func NewSctpConn(gnbid, localAddr, remoteAddr string, ctx context.Context) *Sctp
 		gnbId:      gnbid,
 		localAddr:  localAddr,
 		remoteAddr: remoteAddr,
-
-		ReadCh:       make(chan []byte, defaultChannelBuffer),
-		readWorkers:  100,
-		writeWorkers: pond.NewPool(100),
-
-		Logger:  logger.InitLogger("", map[string]string{"mod": "sctp"}),
-		Timeout: requestTimeout,
-		ctx:     ctx,
+		ReadCh:     make(chan []byte, defaultChannelBuffer),
+		Logger:     logger.InitLogger("", map[string]string{"mod": "sctp"}),
+		ctx:        ctx,
 	}
 }
 
@@ -77,93 +56,116 @@ func (sc *SctpConn) Connect() error {
 	if sc.localAddr != "" {
 		laddr, err = sctp.ResolveSCTPAddr("sctp", sc.localAddr)
 		if err != nil {
-			return fmt.Errorf("resolve local addr: %v", err)
+			return fmt.Errorf("resolve local addr: %w", err)
 		}
 	}
 
 	raddr, err = sctp.ResolveSCTPAddr("sctp", sc.remoteAddr)
 	if err != nil {
-		return fmt.Errorf("resolve remote addr: %v", err)
+		return fmt.Errorf("resolve remote addr: %w", err)
 	}
 
 	sc.conn, err = sctp.DialSCTPExt("sctp", laddr, raddr, sctp.InitMsg{
-		NumOstreams:    sctpDefaultNumOstreams,
-		MaxInstreams:   sctpDefaultMaxInstreams,
-		MaxAttempts:    sctpDefaultMaxAttempts,
-		MaxInitTimeout: sctpDefaultMaxInitTimeout,
+		NumOstreams:    5,
+		MaxInstreams:   3,
+		MaxAttempts:    2,
+		MaxInitTimeout: 2,
 	})
 	if err != nil {
-		return fmt.Errorf("dial SCTP: %v", err)
+		return fmt.Errorf("dial SCTP: %w", err)
 	}
-	sc.conn.SubscribeEvents(sctp.SCTP_EVENT_DATA_IO)
 
-	// Start workers
-	sc.startWorkers()
+	events := sctp.SCTP_EVENT_DATA_IO | sctp.SCTP_EVENT_SHUTDOWN | sctp.SCTP_EVENT_ASSOCIATION
+	if err := sc.conn.SubscribeEvents(events); err != nil {
+		return fmt.Errorf("subscribe events: %w", err)
+	}
+
+	info := &sctp.SndRcvInfo{PPID: NGAP_PPID}
+	if err := sc.conn.SetDefaultSentParam(info); err != nil {
+		return fmt.Errorf("set default sent param: %w", err)
+	}
+
+	if err := sc.conn.SetReadBuffer(readBufferSize); err != nil {
+		return fmt.Errorf("set read buffer: %w", err)
+	}
+
+	sc.Info("SCTP connection established with PPID=%d", NGAP_PPID)
+
+	// Start read loop
+	sc.wg.Add(1)
+	go sc.readLoop()
 
 	return nil
 }
 
-// read and write workers
-func (sc *SctpConn) startWorkers() {
-	// Multiple read workers for parallel receiving
-	for i := 0; i < sc.readWorkers; i++ {
-		sc.wg.Add(1)
-		go sc.readWorker()
-	}
-
-	// Multiple write workers for parallel sending
-	// for i := 0; i < sc.writeWorkers; i++ {
-	// 	sc.wg.Add(1)
-	// 	go sc.writeWorker()
-	// }
-}
-
-func (sc *SctpConn) readWorker() {
+func (sc *SctpConn) readLoop() {
 	defer sc.wg.Done()
+	defer close(sc.ReadCh)
 
-	// Each worker needs its own buffer to avoid race conditions
-	buf := make([]byte, payloadSize)
+	buf := make([]byte, readBufferSize)
 
 	for {
+		// Check context cancellation before blocking read
 		select {
 		case <-sc.ctx.Done():
 			return
 		default:
-			// Only ONE worker should call SCTPRead at a time
-			// Need to serialize this call
-			n, _, err := sc.readFromConn(buf)
-			if err != nil {
+		}
+
+		n, info, err := sc.conn.SCTPRead(buf)
+		if err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				sc.Error("Connection closed by peer")
+				return
+			}
+			if err == syscall.EAGAIN || err == syscall.EINTR {
 				continue
 			}
+			sc.Error("Read error: %v", err)
+			return
+		}
 
-			// sc.Info("[SCTP] Received message on stream %d", info.Stream)
+		if info == nil {
+			sc.Error("Received nil info")
+			continue
+		}
 
-			// Copy data to avoid buffer reuse issues
-			data := make([]byte, n)
-			copy(data, buf[:n])
+		if info.PPID != NGAP_PPID {
+			sc.Error("Wrong PPID: %d, expected %d", info.PPID, NGAP_PPID)
+			continue
+		}
 
-			select {
-			case sc.ReadCh <- data:
-			default: // Drop if channel full
-				sc.Warn("Drop received msg, cause of full queue.")
-				//logger.SctpConnStats[sc.gnbId].DLmessagesDropped.Add(1)
-			}
+		sc.Info("Received %d bytes (PPID=%d, Stream=%d)", n, info.PPID, info.Stream)
+
+		// Copy data to avoid buffer reuse issues
+		data := make([]byte, n)
+		copy(data, buf[:n])
+
+		select {
+		case sc.ReadCh <- data:
+		case <-sc.ctx.Done():
+			return
+		default:
+			sc.Warn("Drop received msg, cause of full queue")
 		}
 	}
 }
 
-func (sc *SctpConn) Send(data []byte) {
-	streamID := uint16(0)
-	sc.writeWorkers.Submit(func() {
-		err := sc.writeToConn(data, streamID)
-		if err != nil {
-			sc.Error("[SCTP] Write error: %v\n", err)
-			//logger.SctpConnStats[sc.gnbId].ULmessagesDropped.Add(1)
-		} else {
-			//logger.SctpConnStats[sc.gnbId].ULmessages.Add(1)
-		}
-	})
-	streamID = (streamID + 1) % sctpDefaultNumOstreams
+func (sc *SctpConn) Send(data []byte) error {
+	if sc.conn == nil {
+		return fmt.Errorf("SCTP connection not established")
+	}
+
+	info := &sctp.SndRcvInfo{
+		PPID:   NGAP_PPID,
+		Stream: 0,
+	}
+
+	_, err := sc.conn.SCTPWrite(data, info)
+	if err != nil {
+	}
+
+	return nil
 }
 
 func (sc *SctpConn) Read() <-chan []byte {
@@ -172,31 +174,10 @@ func (sc *SctpConn) Read() <-chan []byte {
 
 func (sc *SctpConn) Close() error {
 	if sc.conn != nil {
-		sc.conn.Close()
+		if err := sc.conn.Close(); err != nil {
+			return err
+		}
 	}
 	sc.wg.Wait()
 	return nil
-}
-
-// Thread-safe SCTP read with mutex protection
-func (sc *SctpConn) readFromConn(buf []byte) (int, *sctp.SndRcvInfo, error) {
-	sc.readMutex.Lock()
-	defer sc.readMutex.Unlock()
-	return sc.conn.SCTPRead(buf)
-}
-
-// Thread-safe SCTP write with mutex protection
-func (sc *SctpConn) writeToConn(data []byte, streamID uint16) error {
-	sc.writeMutex.Lock()
-	defer sc.writeMutex.Unlock()
-
-	sc.conn.SetWriteDeadline(time.Now().Add(requestTimeout))
-
-	info := &sctp.SndRcvInfo{
-		Stream: streamID,
-		PPID:   NGAP_PPID,
-	}
-
-	_, err := sc.conn.SCTPWrite(data, info)
-	return err
 }

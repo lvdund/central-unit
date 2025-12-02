@@ -43,9 +43,9 @@ func Build5GSTMSI(part2, part1 aper.BitString) []byte {
 //	amfSetID: 2-byte big-endian (10-bit value, zero-extended)
 //	amfPointer: 1-byte (6-bit value)
 //	fivegTMSI: 4-byte big-endian (32-bit TMSI)
-func Decode5GSTMSI(tmsi []byte) *ies.FiveGSTMSI {
+func Decode5GSTMSI(tmsi []byte) (*ies.FiveGSTMSI, error) {
 	if len(tmsi) != 6 {
-		panic("5G-S-TMSI must be 6 bytes")
+		return nil, fmt.Errorf("5G-S-TMSI (%v) must be 6 bytes", tmsi)
 	}
 
 	// Reconstruct 48-bit integer (as uint64)
@@ -70,7 +70,7 @@ func Decode5GSTMSI(tmsi []byte) *ies.FiveGSTMSI {
 		AMFSetID:   aper.BitString{Bytes: amfSetID, NumBits: 10},
 		AMFPointer: aper.BitString{Bytes: amfPointer, NumBits: 9},
 		FiveGTMSI:  fivegTMSI,
-	}
+	}, nil
 }
 
 func BitStringToUint64(asn *aper.BitString) uint64 {

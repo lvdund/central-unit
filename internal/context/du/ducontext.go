@@ -1,6 +1,7 @@
 package du
 
 import (
+	"central-unit/internal/common/logger"
 	"fmt"
 
 	"github.com/JocelynWS/f1-gen/ies"
@@ -17,10 +18,11 @@ const (
 // GNBDU represents a Distributed Unit (DU) context
 // Based on nr_rrc_du_container_t from OAI
 type GNBDU struct {
-	DuId        int64               // DU ID (GNB-DU-ID)
-	DuName      string              // DU name
-	State       string              // DU state (INACTIVE, ACTIVE, LOST)
-	Tnla        TNLAssociation      // Transport Network Layer Association
+	*logger.Logger
+	DuId        int64  // DU ID (GNB-DU-ID)
+	DuName      string // DU name
+	State       string // DU state (INACTIVE, ACTIVE, LOST)
+	SctpConn    *sctp.SCTPConn
 	SetupReq    *ies.F1SetupRequest // F1 Setup Request message
 	MIB         []byte              // Decoded Master Information Block (raw bytes for now)
 	SIB1        []byte              // Decoded System Information Block Type 1 (raw bytes for now)
@@ -28,12 +30,12 @@ type GNBDU struct {
 	ServedCells []ServedCell        // List of served cells
 }
 
-// TNLAssociation represents the transport network layer association
-type TNLAssociation struct {
-	SctpConn         *sctp.SCTPConn // Raw SCTP connection for DU (incoming connections)
-	TnlaWeightFactor int64
-	Streams          uint16
-}
+// // TNLAssociation represents the transport network layer association
+// type TNLAssociation struct {
+// 	SctpConn         *sctp.SCTPConn // Raw SCTP connection for DU (incoming connections)
+// 	TnlaWeightFactor int64
+// 	Streams          uint16
+// }
 
 // ServedCell represents a cell served by the DU
 type ServedCell struct {
@@ -53,14 +55,14 @@ type PLMNInfo struct {
 
 // SendF1ap sends F1AP message to the DU
 func (du *GNBDU) SendF1ap(pdu []byte) error {
-	if du.Tnla.SctpConn == nil {
+	if du.SctpConn == nil {
 		return fmt.Errorf("SCTP connection not established for DU %d", du.DuId)
 	}
 	info := &sctp.SndRcvInfo{
-		PPID:   60, // F1AP PPID
+		PPID:   62,
 		Stream: 0,
 	}
-	_, err := du.Tnla.SctpConn.SCTPWrite(pdu, info)
+	_, err := du.SctpConn.SCTPWrite(pdu, info)
 	return err
 }
 

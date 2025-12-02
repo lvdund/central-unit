@@ -1,13 +1,17 @@
 cucp:
-  node_id: 0xe00
+  node_id: "0001"
   node_name: "gNB-CU-CP"
   plmn:
-    mcc: "208"
-    mnc: "93"
+    mcc: "999"
+    mnc: "70"
     mnc_length: 2
+  slices:
+    - sst: "01"
+      sd: "010203"
+  tac: "000001"
 
 f1ap:
-  local_address: "127.0.0.1"
+  local_address: "192.168.1.10"
   local_port: 38472
   sctp:
     in_streams: 2
@@ -16,16 +20,18 @@ f1ap:
     f1_setup_timer: "10s"
 
 e1ap:
-  local_address: "127.0.0.1"
+  local_address: "192.168.1.10"
   local_port: 38462
   sctp:
     in_streams: 2
     out_streams: 2
 
 ngap:
-  amf_address: "127.0.0.1"
+  gnb_id: "000001"
+  amf_address: "192.168.1.15"
   amf_port: 38412
-  local_address: "127.0.0.1"
+  local_address: "192.168.1.10"
+  local_port: 9487
   sctp:
     in_streams: 2
     out_streams: 2

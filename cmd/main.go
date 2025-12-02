@@ -27,6 +27,13 @@ func main() {
 		exit(fmt.Errorf("start service: %w", err))
 	}
 
+	go func() {
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+		<-stop
+		os.Exit(0)
+	}()
+
 	waitForShutdown(svc)
 }
 

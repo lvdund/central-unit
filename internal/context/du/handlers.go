@@ -6,6 +6,7 @@ import (
 
 	f1ap "github.com/JocelynWS/f1-gen"
 	"github.com/JocelynWS/f1-gen/ies"
+	"github.com/ishidawataru/sctp"
 )
 
 // F1apDecode decodes F1AP PDU bytes and returns the decoded message
@@ -43,9 +44,9 @@ type F1apMessage struct {
 }
 
 // Based on CU_send_F1_SETUP_RESPONSE from OAI
-func (du *GNBDU) SendF1SetupResponse(transactionID int64, gnbCURRCVersion ies.RRCVersion, cellsToActivate []ies.CellstobeActivatedListItem) error {
-	// Create F1 Setup Response message
-	// RRCVersion uses 3 bits as shown in the test file (f1_test.go)
+func (du *GNBDU) SendF1SetupResponse(transactionID int64, gnbCURRCVersion ies.RRCVersion, cellsToActivate []ies.CellstobeActivatedListItem, conn *sctp.SCTPConn) error {
+	du.SctpConn = conn
+
 	msg := ies.F1SetupResponse{
 		TransactionID:          transactionID,
 		GNBCURRCVersion:        gnbCURRCVersion,
@@ -54,13 +55,15 @@ func (du *GNBDU) SendF1SetupResponse(transactionID int64, gnbCURRCVersion ies.RR
 	}
 
 	// Encode the message
-	var buf bytes.Buffer
-	if err := msg.Encode(&buf); err != nil {
+	buf, err := f1ap.F1apEncode(&msg)
+	if err != nil {
 		return fmt.Errorf("encode F1 Setup Response: %w", err)
 	}
 
+	du.Info("Send F1 Setup Response to DU %d", du.DuId)
+
 	// Send via SCTP
-	return du.SendF1ap(buf.Bytes())
+	return du.SendF1ap(buf)
 }
 
 // SendF1SetupFailure sends F1 Setup Failure to the DU

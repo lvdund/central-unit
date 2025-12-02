@@ -27,11 +27,13 @@ func (cu *CuCpContext) SendNasPdu(
 	case uecontext.UE_ONGOING, uecontext.UE_READY:
 		buf, err = cu.ngUplinkNasTransport(nasPdu, ue)
 		if err != nil {
-			cu.Error("Encode NG Initial UE Message: %s", err.Error())
+			cu.Error("Encode NG Uplink NAS Transport: %s", err.Error())
 			return
 		}
 	}
 
+	cu.Info("Sending NGAP to AMF")
+	// _ = buf
 	amf.SendNgap(buf)
 	if err != nil {
 		cu.Error("Error sending Nas message in NGAP: %s", err.Error())
@@ -77,7 +79,6 @@ func (cu *CuCpContext) SendNgSetupRequest(amf *amfcontext.GNBAmf) {
 	msg.DefaultPagingDRX = ies.PagingDRX{Value: ies.PagingDRXV128}
 
 	ngapPdu, err := ngap.NgapEncode(&msg)
-
 	if err != nil {
 		cu.Error("Error sending NG Setup Request: ", err)
 	}
@@ -95,19 +96,23 @@ func (cu *CuCpContext) ngInitialUEMessage(
 ) ([]byte, error) {
 	cu.Info("Create InitialUeMessage NGAP")
 
+	tac := cu.getTacInBytes()
+	plmn := cu.GetPLMNIdentity()
+	cellid := cu.GetNRCellIdentity()
+
 	msg := ies.InitialUEMessage{
-		RANUENGAPID: int64(ue.RrcUeId),
+		RANUENGAPID: ue.RanUeNgapId,
 		NASPDU:      nasPdu,
 		UserLocationInformation: ies.UserLocationInformation{
 			Choice: ies.UserLocationInformationPresentUserlocationinformationnr,
 			UserLocationInformationNR: &ies.UserLocationInformationNR{
 				NRCGI: ies.NRCGI{
-					NRCellIdentity: cu.GetNRCellIdentity(),
-					PLMNIdentity:   cu.GetPLMNIdentity(),
+					NRCellIdentity: cellid,
+					PLMNIdentity:   plmn,
 				},
 				TAI: ies.TAI{
-					PLMNIdentity: cu.GetPLMNIdentity(),
-					TAC:          cu.GetMccAndMncInOctets(),
+					PLMNIdentity: plmn,
+					TAC:          tac,
 				},
 			},
 		},
@@ -125,8 +130,8 @@ func (cu *CuCpContext) ngUplinkNasTransport(
 	ue *uecontext.GNBUe,
 ) ([]byte, error) {
 	msg := ies.UplinkNASTransport{
-		AMFUENGAPID: 0,
-		RANUENGAPID: int64(ue.RrcUeId),
+		AMFUENGAPID: ue.AmfUeNgapId,
+		RANUENGAPID: ue.RanUeNgapId,
 		NASPDU:      nasPdu,
 		UserLocationInformation: ies.UserLocationInformation{
 			Choice: ies.UserLocationInformationPresentUserlocationinformationnr,
@@ -137,7 +142,7 @@ func (cu *CuCpContext) ngUplinkNasTransport(
 				},
 				TAI: ies.TAI{
 					PLMNIdentity: cu.GetPLMNIdentity(),
-					TAC:          cu.GetMccAndMncInOctets(),
+					TAC:          cu.getTacInBytes(),
 				},
 			},
 		},

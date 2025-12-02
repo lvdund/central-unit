@@ -21,10 +21,11 @@ type Config struct {
 }
 
 type CUCPConfig struct {
-	NodeID   uint32  `yaml:"node_id"`
+	NodeID   string  `yaml:"node_id"`
 	NodeName string  `yaml:"node_name"`
 	PLMN     PLMN    `yaml:"plmn"`
 	Slices   []Slice `yaml:"slices"`
+	TAC      string  `yaml:"tac"`
 }
 
 type PLMN struct {
@@ -61,6 +62,7 @@ type E1APConfig struct {
 }
 
 type NGAPConfig struct {
+	GnbId        string     `yaml:"gnb_id"`
 	AMFAddress   string     `yaml:"amf_address"`
 	AMFPort      int        `yaml:"amf_port"`
 	LocalAddress string     `yaml:"local_address"`
@@ -105,7 +107,7 @@ func Load(path string) (Config, error) {
 func (c Config) Validate() error {
 	var problems []string
 
-	if c.CUCP.NodeID == 0 {
+	if c.CUCP.NodeID == "" {
 		problems = append(problems, "cucp.node_id must be non-zero")
 	}
 	if c.CUCP.NodeName == "" {

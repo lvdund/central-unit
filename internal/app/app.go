@@ -51,7 +51,7 @@ func New(cfgPath string) (*App, error) {
 
 // Start starts the CU-CP application
 func (a *App) Start() error {
-	a.logger.Info("Starting CU-CP application", "node_name", a.cfg.CUCP.NodeName)
+	a.logger.Info("Starting CU-CP application %s", a.cfg.CUCP.NodeName)
 
 	// Initialize CU-CP context with config
 	// Convert config to model.AMF for initialization
@@ -61,25 +61,7 @@ func (a *App) Start() error {
 	}
 
 	// Initialize CU-CP context
-	cuCtx := cucontext.InitContext(amf)
-
-	// Set control info from config
-	cuCtx.SetControlInfoFromConfig(
-		a.cfg.CUCP.PLMN.MCC,
-		a.cfg.CUCP.PLMN.MNC,
-		a.cfg.NGAP.LocalAddress,
-		fmt.Sprintf("%x", a.cfg.CUCP.NodeID),
-		"000001", // Default TAC, can be from config if available
-		a.cfg.NGAP.LocalPort,
-	)
-
-	// Set slice info from config
-	if len(a.cfg.CUCP.Slices) > 0 {
-		cuCtx.SetSliceInfoFromConfig(
-			a.cfg.CUCP.Slices[0].SST,
-			a.cfg.CUCP.Slices[0].SD,
-		)
-	}
+	cuCtx := cucontext.InitContext(amf, a.cfg)
 
 	// Update context
 	cuCtx.Ctx = a.ctx

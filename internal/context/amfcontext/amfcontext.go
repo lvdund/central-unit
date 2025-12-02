@@ -1,6 +1,7 @@
 package amfcontext
 
 import (
+	"central-unit/internal/common/logger"
 	"central-unit/internal/transport"
 	"fmt"
 
@@ -15,6 +16,7 @@ const (
 )
 
 type GNBAmf struct {
+	*logger.Logger
 	AmfIp               string         // AMF ip
 	AmfPort             int            // AMF port
 	AmfId               int64          // AMF id
@@ -175,7 +177,11 @@ func (amf *GNBAmf) SetPointer(pointer []byte) {
 }
 
 func (amf *GNBAmf) SendNgap(pdu []byte) error {
-	//TODO: included information for SCTP association.
-	amf.Tnla.SctpConn.Send(pdu)
+	err := amf.Tnla.SctpConn.Send(pdu)
+	if err != nil {
+		amf.Error("Error sending NGAP message: %v", err)
+		return err
+	}
+	amf.Info("Sent NGAP message to AMF %d", amf.AmfId)
 	return nil
 }

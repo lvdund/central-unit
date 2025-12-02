@@ -1,8 +1,8 @@
 package context
 
 import (
+	"central-unit/internal/common/logger"
 	"central-unit/internal/context/du"
-	"central-unit/internal/context/uecontext"
 	"fmt"
 
 	"github.com/JocelynWS/f1-gen/ies"
@@ -33,10 +33,12 @@ func (cu *CuCpContext) handleF1SetupRequest(setupReq *ies.F1SetupRequest) {
 		return
 	}
 	cellPLMNBytes := cellInfo.ServedPLMNs[0].PLMNIdentity
+	// 10011001 11111001 00110111
+	// 10011001 11111001 00000111
 
 	cuPLMNBytes := cu.GetMccAndMncInOctets()
 	if !cu.plmnMatches(cellPLMNBytes, cuPLMNBytes) {
-		cu.Error("PLMN mismatch: CU %s.%s, DU %x", cu.ControlInfo.mcc, cu.ControlInfo.mnc, cellPLMNBytes)
+		cu.Error("PLMN mismatch: CU %s.%s, DU %.8b", cu.ControlInfo.mcc, cu.ControlInfo.mnc, cuPLMNBytes)
 		return
 	}
 
@@ -75,6 +77,7 @@ func (cu *CuCpContext) handleF1SetupRequest(setupReq *ies.F1SetupRequest) {
 	cu.Info("DU uses RRC version %x", setupReq.GNBDURRCVersion.LatestRRCVersion.Bytes)
 
 	var duCtx *du.GNBDU = &du.GNBDU{}
+	duCtx.Logger = logger.InitLogger("info", map[string]string{"mod": "du"})
 	duCtx.DuId = duId
 	duCtx.DuName = duName
 	duCtx.State = du.DU_ACTIVE
@@ -95,7 +98,10 @@ func (cu *CuCpContext) handleF1SetupRequest(setupReq *ies.F1SetupRequest) {
 			TAC: cellInfo.FiveGSTAC,
 		},
 	}
+
 	cu.DuPool.Store(duId, duCtx)
+	cu.Info("==== Store DU %d ====", duId)
+	cu.DU = duCtx
 
 	// Create cell to activate
 	cellToActivate := ies.CellstobeActivatedListItem{
@@ -108,34 +114,33 @@ func (cu *CuCpContext) handleF1SetupRequest(setupReq *ies.F1SetupRequest) {
 		},
 	}
 
-	if err := duCtx.SendF1SetupResponse(transactionID, setupReq.GNBDURRCVersion, []ies.CellstobeActivatedListItem{cellToActivate}); err != nil {
+	cu.Info("Create F1 SetupResponse")
+	if err := duCtx.SendF1SetupResponse(transactionID, setupReq.GNBDURRCVersion, []ies.CellstobeActivatedListItem{cellToActivate}, cu.TempDuConn); err != nil {
 		cu.Error("Error sending F1 Setup Response: %v", err)
 	} else {
-		cu.Info("F1 Setup completed successfully with DU %d (%s)", duCtx.DuId, duCtx.DuName)
+		cu.Info("F1 Setup Procedure successfully with DU %d (%s)", duCtx.DuId, duCtx.DuName)
 	}
 }
 
 func (cu *CuCpContext) handleInitialULRRCMessageTransfer(msg *ies.InitialULRRCMessageTransfer) {
 	cu.Info("Processing Initial UL RRC Message Transfer: DU-UE-ID=%d, C-RNTI=%d", msg.GNBDUUEF1APID, msg.CRNTI)
 
-	duCtx, ok := cu.DuPool.Load(msg.GNBDUUEF1APID)
-	if !ok {
-		return
-	}
+	// duCtx, ok := cu.DuPool.Load(msg.GNBDUUEF1APID)
+	// if !ok {
+	// 	cu.Error("DU %d not found in DuPool", msg.GNBDUUEF1APID)
+	// 	return
+	// }
+	duCtx := cu.DU
 
-	rrcMsg, err := rrc.Decode(msg.RRCContainer)
+	ulCcchMsg := rrcies.UL_CCCH_Message{}
+	err := rrc.Decode(msg.RRCContainer, &ulCcchMsg)
 	if err != nil {
 		cu.Error("Error decoding RRC container: %s", err.Error())
 		return
 	}
-	ulCcchMsg, ok := rrcMsg.(*rrcies.UL_CCCH_Message)
-	if !ok {
-		cu.Error("RRC message is not UL-CCCH-Message")
-		return
-	}
 	rrcSetupRequest := ulCcchMsg.Message.C1.RrcSetupRequest
 	if err := cu.handleRRCSetupRequest(
-		duCtx.(*du.GNBDU),
+		duCtx,
 		&rrcSetupRequest.RrcSetupRequest,
 		msg,
 	); err != nil {
@@ -149,21 +154,23 @@ func (cu *CuCpContext) handleInitialULRRCMessageTransfer(msg *ies.InitialULRRCMe
 func (cu *CuCpContext) handleULRRCMessageTransfer(msg *ies.ULRRCMessageTransfer) {
 	var err error
 
-	// Validation check 1: msg.GNBCUUEF1APID must exist in cu.RrcUePool
-	ueValue, exists := cu.RrcUePool.Load(msg.GNBCUUEF1APID)
-	if !exists {
-		cu.Error("UL RRC Message Transfer: CU UE ID %d not found in RrcUePool",
-			msg.GNBCUUEF1APID)
-		return
-	}
+	// // Validation check 1: msg.GNBCUUEF1APID must exist in cu.RrcUePool
+	// ueValue, exists := cu.RrcUePool.Load(msg.GNBCUUEF1APID)
+	// if !exists {
+	// 	cu.Error("UL RRC Message Transfer: CU UE ID %d not found in RrcUePool",
+	// 		msg.GNBCUUEF1APID)
+	// 	return
+	// }
 
-	// Validation check 2: Load UE and verify msg.GNBDUUEF1APID == ue.DuUeId
-	ue, ok := ueValue.(*uecontext.GNBUe)
-	if !ok {
-		cu.Error("UL RRC Message Transfer: Invalid UE type in RrcUePool for CU UE ID %d",
-			msg.GNBCUUEF1APID)
-		return
-	}
+	// // Validation check 2: Load UE and verify msg.GNBDUUEF1APID == ue.DuUeId
+	// ue, ok := ueValue.(*uecontext.GNBUe)
+	// if !ok {
+	// 	cu.Error("UL RRC Message Transfer: Invalid UE type in RrcUePool for CU UE ID %d",
+	// 		msg.GNBCUUEF1APID)
+	// 	return
+	// }
+
+	ue := cu.UE
 
 	if uint64(msg.GNBDUUEF1APID) != ue.DuUeId {
 		cu.Error("UL RRC Message Transfer: DU UE ID mismatch. Expected %d, got %d",
@@ -177,21 +184,15 @@ func (cu *CuCpContext) handleULRRCMessageTransfer(msg *ies.ULRRCMessageTransfer)
 		return
 	}
 
-	rrcMsg, err := rrc.Decode(msg.RRCContainer)
+	ulDcchMsg := rrcies.UL_DCCH_Message{}
+	err = rrc.Decode(msg.RRCContainer, &ulDcchMsg)
 	if err != nil {
-		cu.Error("Err decode RRC from UL RRC Message Transfer: %s", err.Error())
-		return
-	}
-
-	// Parse UL-DCCH-Message and switch on message type
-	ulDcchMsg, ok := rrcMsg.(*rrcies.UL_DCCH_Message)
-	if !ok {
-		cu.Error("UL RRC Message Transfer: RRC message is not UL-DCCH-Message")
+		cu.Error("Err decode RRC from UL RRC Message Transfer: %s - %v", err.Error(), msg.RRCContainer)
 		return
 	}
 
 	// Check if message uses C1 choice
-	if ulDcchMsg.Message.Choice != 0 { // 0 = C1, other values are MessageClassExtension
+	if ulDcchMsg.Message.Choice != 1 { // 1 = C1, other values are MessageClassExtension
 		cu.Error("UL RRC Message Transfer: Unsupported message choice %d", ulDcchMsg.Message.Choice)
 		return
 	}
@@ -248,12 +249,13 @@ func (cu *CuCpContext) handleULRRCMessageTransfer(msg *ies.ULRRCMessageTransfer)
 
 func (cu *CuCpContext) handleRRCUEContextSetupResponse(msg *ies.UEContextSetupResponse) {
 
-	ueValue, _ := cu.RrcUePool.Load(0)
-	ue, ok := ueValue.(*uecontext.GNBUe)
-	if !ok {
-		cu.Error("Error getting UE")
-		return
-	}
+	// ueValue, _ := cu.RrcUePool.Load(0)
+	// ue, ok := ueValue.(*uecontext.GNBUe)
+	// if !ok {
+	// 	cu.Error("Error getting UE")
+	// 	return
+	// }
+	ue := cu.UE
 
 	masterCellGroupBytes, err := rrc.Encode(ue.MasterCellGroup)
 	if err != nil {
@@ -308,12 +310,8 @@ func (cu *CuCpContext) handleRRCUEContextSetupResponse(msg *ies.UEContextSetupRe
 		return
 	}
 
-	duCtx, _ := cu.DuPool.Load(ue.DuUeId)
-	duCtx.(*du.GNBDU).SendF1ap(buf)
-	if err != nil {
-		cu.Error("Error sending RRC Reconfiguration: %s", err.Error())
-		return
-	}
-
+	// duCtx, _ := cu.DuPool.Load(ue.DuUeId)
+	duCtx := cu.DU
+	duCtx.SendF1ap(buf)
 	cu.Info("RRC Reconfiguration sent successfully")
 }

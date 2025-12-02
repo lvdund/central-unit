@@ -1,0 +1,90 @@
+Golang CU-CP implementation plan
+
+1) Project structure (modules/folders and purpose)
+- /cmd/cu-cp
+  - main.go: load config, init observability, start transport (NGAP/F1AP/E1AP), start logic loops, register signal handlers.
+- /config
+  - config.go/config.yml: validated config (PLMN/cell/slice, IP/ports, SCTP params, feature flags split/mono, logging/metrics).
+- /internal/context
+  - ue.go: UE struct (IDs, RRC state, SRB/DRB, PDU sessions, security, timers, NAS cache, HO state).
+  - du.go: DU assoc, served cells, MIB/SIB/MTC cache, RRC version.
+  - cuup.go: CU-UP assoc, slice support, state.
+  - amf.go: AMF assoc metadata (plmn/guami, overload, streams).
+  - mapping.go: UE ID ↔ {duAssoc, duUeId, cuupAssoc}; AMF_UE_NGAP_ID index; (duAssoc,rnti) index.
+  - store.go: sharded maps + secondary indexes; snapshot/eviction hooks.
+- /internal/statemachine
+  - rrc.go: idle ↔ connected ↔ connected-inactive transitions; guards and timer scheduling.
+- /internal/logic
+  - rrc.go: orchestrator loop (event-driven) and RRC procedures (setup, reconfig, release, reestab, HO, paging).
+  - ngap.go: NGAP procedures (NG Setup, Initial UE, context setup/release, UL/DL NAS transport, PDU session setup/modify/release, paging, HO).
+  - f1ap.go: F1 setup, UL/DL RRC msg transfer, UE ctx setup/mod/rel, reset, DU cfg update.
+  - e1ap.go: E1 setup, bearer ctx setup/mod/rel, CU-UP loss.
+  - policy.go: slice/CU-UP selection, admission.
+- /internal/transport
+  - ngap/: SCTP assoc manager, decode/encode (using existing NGAP lib), per-assoc send queues, backpressure/batching.
+  - f1ap/: SCTP for DU; same pattern.
+  - e1ap/: SCTP for CU-UP; same pattern.
+  - dispatcher.go: event fan-in/out to logic; preserves UE ordering per shard.
+- /internal/timers
+  - wheel.go: hashed timing wheel for inactivity/paging/retrans timers; callback to logic.
+- /internal/obs
+  - logging/, metrics/, tracing/: structured with UE/assoc IDs; queue depth/latency.
+- /internal/utils
+  - pools (buffer/ASN.1), workers (optional), ratelimit/backpressure helpers.
+- /test
+  - Emulated DU/AMF/CU-UP, fuzzers for decoders, soak/throughput harness.
+
+2) Implementation steps (with notes)
+- Step 0: Config + scaffolding
+  - Define config structs; add validation (ports, PLMN, slice map, SCTP params). Wire logger/metrics/tracing early.
+- Step 1: Context store + indexes
+  - Implement sharded UE store (RWMutex per shard), secondary indexes (AMF_UE_NGAP_ID, du+rnti), mapping struct (duAssoc, duUeId, cuupAssoc).
+  - Add RRC state machine integration (state in UE context; transitions via statemachine/rrc.go).
+- Step 2: Transport skeletons
+  - Build SCTP assoc manager per protocol (NGAP/F1AP/E1AP): connect/listen, stream dispatch, per-assoc send queue with batching and backpressure.
+  - Hook decoders from your protocol libs; emit events to dispatcher channel.
+- Step 3: NGAP bring-up
+  - NG Setup Request/Response; maintain AMF assoc state.
+  - Initial UE Message path stubbed to logic (creates UE, pushes to state machine).
+- Step 4: F1AP bring-up
+  - F1 Setup (CU side), accept DU, store DU context; UL RRC Initial message path to logic.
+- Step 5: E1AP bring-up
+  - E1 Setup with CU-UP; store CU-UP context; selection policy stub.
+- Step 6: Core procedures
+  - Initial access: F1 UL RRC SetupReq -> RRC Setup -> UL SetupComplete -> NGAP Initial UE -> NGAP Initial Context Setup -> E1 Bearer Setup -> F1 UE Context Setup -> RRC Reconfig.
+  - PDU session setup/modify/release: NGAP PDU Session Resource procedures -> E1 bearer ops -> F1 UE ctx update -> RRC Reconfig with NAS.
+  - Release: NGAP UE Context Release + RRC Release + F1 UE Context Release + E1 Bearer Release.
+- Step 7: Mobility & reestablishment
+  - RRC Reestablishment flow; CU-UP PDCP status via E1; F1 updates; state transitions.
+  - Handover (F1/N2): HO Required/Command/Notify; PDCP status transfer (E1), UE context switch on F1.
+  - Connected-inactive: suspend/resume handling per RRC state machine.
+- Step 8: Paging and timers
+  - Paging generation (PCCH) per SIB1; schedule via timer wheel; deliver via F1.
+  - Inactivity timers, T300/T301/T304; timer callbacks enqueue events.
+- Step 9: Hardening & perf
+  - Backpressure policies on send queues; bounded channels; drop/fast-fail logging.
+  - Buffer/ASN.1 pools; template PDUs for setups.
+  - Bench soak: attach rate, UE churn, paging storms; profile locks/allocs.
+
+3) Special coding notes and tips
+- SCTP handling
+  - Per-assoc goroutine for read; per-assoc send queue (bounded). Batch writes; use partial reliability if available. Monitor streams/in-out counts.
+  - For 10k+ req/s: shard IO by assoc, avoid global locks; consider RSS/affinity pinning for IO goroutines.
+- Data structures
+  - Sharded maps for UE/DU/CU-UP; RWMutex per shard. Secondary indexes as separate sharded maps.
+  - RRC state stored in UE context; transitions in statemachine/rrc.go; enforce legality before actions.
+  - Mapping struct (UE → {duAssoc, duUeId, cuupAssoc}); store in UE or side-map; always updated on setup/HO/release.
+- Worker/event model
+  - Dispatcher shards by UE hash to preserve per-UE ordering; logic workers consume events and interact with context.
+  - Use sync.Pool for encode/decode buffers; avoid per-PDU allocations.
+- Hot-path optimizations
+  - Cache template PDUs (NG Setup Req/Resp, F1 Setup Resp skeleton); fill deltas.
+  - Preallocate UE IDs; recycle structs on release.
+  - Batch timer wheel ticks; avoid spawning goroutines per timer.
+- Error/edge cases
+  - Lost connections: on F1/E1/NG loss, clear assoc, invalidate mappings, trigger resets, and page/log metrics.
+  - Duplicate IDs: reject DU/CU-UP IDs already registered; reject conflicting cell IDs.
+  - Overload: backpressure on ingress channels; shed load with metrics.
+- Testing
+  - Fuzz decoders with malformed PDUs; integration with dummy DU/AMF/CU-UP.
+  - Load tests for attach/paging/HO; verify state machine transitions and index consistency.
