@@ -108,13 +108,17 @@ func (cu *CuCpContext) configureF1APConnection(conn *sctp.SCTPConn) error {
 }
 
 func (cu *CuCpContext) handleF1APConnection(conn *sctp.SCTPConn) {
-	defer conn.Close()
+	remoteAddr := conn.RemoteAddr().String()
 
-	cu.Info("New DU connection")
-	cu.TempDuConn = conn
+	defer func() {
+		cu.F1ConnMap.Delete(conn)
+		conn.Close()
+		cu.Info("DU connection %s closed", remoteAddr)
+	}()
+
+	cu.Info("New DU connection from %s", remoteAddr)
 
 	buf := make([]byte, 8192)
-	remoteAddr := conn.RemoteAddr().String()
 
 	cu.Info("Handling F1AP connection from %s", remoteAddr)
 
@@ -142,10 +146,9 @@ func (cu *CuCpContext) handleF1APConnection(conn *sctp.SCTPConn) {
 			continue
 		}
 
-		// Copy and dispatch message
 		rawMsg := make([]byte, n)
 		copy(rawMsg, buf[:n])
 
-		go cu.dispatchF1(rawMsg)
+		go cu.dispatchF1(rawMsg, conn)
 	}
 }

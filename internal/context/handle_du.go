@@ -3,16 +3,16 @@ package context
 import (
 	f1ap "github.com/JocelynWS/f1-gen"
 	"github.com/JocelynWS/f1-gen/ies"
+	"github.com/ishidawataru/sctp"
 	"github.com/lvdund/ngap/aper"
 )
 
-func (cu *CuCpContext) dispatchF1(rawMsg []byte) {
+func (cu *CuCpContext) dispatchF1(rawMsg []byte, conn *sctp.SCTPConn) {
 	if len(rawMsg) == 0 {
 		cu.Error("F1AP message is empty")
 		return
 	}
 
-	// Decode F1AP message
 	pdu, err, _ := f1ap.F1apDecode(rawMsg)
 	if err != nil {
 		cu.Error("Error decoding F1AP message from DU: %v", err.Error())
@@ -29,11 +29,11 @@ func (cu *CuCpContext) dispatchF1(rawMsg []byte) {
 		switch pdu.Message.ProcedureCode.Value {
 		case ies.ProcedureCode_F1Setup:
 			cu.Info("Receive F1 Setup Request from DU")
-			cu.handleF1SetupRequest(pdu.Message.Msg.(*ies.F1SetupRequest))
+			cu.handleF1SetupRequest(pdu.Message.Msg.(*ies.F1SetupRequest), conn)
 		case ies.ProcedureCode_InitialULRRCMessageTransfer:
 			cu.Info("Receive Initial UL RRC Message from DU")
 			if initialULMsg, ok := pdu.Message.Msg.(*ies.InitialULRRCMessageTransfer); ok {
-				cu.handleInitialULRRCMessageTransfer(initialULMsg)
+				cu.handleInitialULRRCMessageTransfer(initialULMsg, conn)
 			} else {
 				cu.Error("Failed to cast Initial UL RRC Message Transfer")
 			}

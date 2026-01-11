@@ -40,6 +40,7 @@ type GNBUe struct {
 	RrcUeId            uint64
 	DuId               uint64
 	DuUeId             uint64
+	GnbCuUeF1apId      uint64
 	Tmsi5gs_part1      *aper.BitString
 	Tmsi5gs            *ies.FiveGSTMSI
 	Rnti               int64

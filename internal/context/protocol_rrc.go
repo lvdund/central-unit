@@ -137,9 +137,12 @@ func (cu *CuCpContext) handleRrcSetupComplete(
 	ue.State = uecontext.UE_INITIALIZED
 
 	cu.Info("Send NAS Registration Request to AMF")
-	amf := cu.AMF
+	amf, err := cu.GetAMFById(ue.AmfId)
+	if err != nil {
+		return fmt.Errorf("AMF not found for UE: %v", err)
+	}
 	cu.SendNasPdu(msg.CriticalExtensions.RrcSetupComplete.DedicatedNAS_Message.Value, ue, amf)
-	return err
+	return nil
 }
 
 func (cu *CuCpContext) handleULInformationTransfer(
@@ -147,11 +150,10 @@ func (cu *CuCpContext) handleULInformationTransfer(
 	ulInformationTransfer *rrcies.ULInformationTransfer,
 ) error {
 	ue.State = uecontext.UE_ONGOING
-	// amf, ok := cu.AmfPool.Load(0) //WARN: now fix id amf = 0
-	// if !ok {
-	// 	return fmt.Errorf("cannot load amf")
-	// }
-	amf := cu.AMF
+	amf, err := cu.GetAMFById(ue.AmfId)
+	if err != nil {
+		return fmt.Errorf("AMF not found for UE: %v", err)
+	}
 	cu.SendNasPdu(ulInformationTransfer.CriticalExtensions.UlInformationTransfer.DedicatedNAS_Message.Value, ue, amf)
 	return nil
 }
@@ -194,8 +196,10 @@ func (cu *CuCpContext) handleRRCSecurityModeComplete(
 		return fmt.Errorf("failed to encode UE Context Setup Request: %w", err)
 	}
 
-	// duCtx, _ := cu.DuPool.Load(ue.DuUeId)
-	duCtx := cu.DU
+	duCtx, err := cu.GetDUForUE(ue)
+	if err != nil {
+		return fmt.Errorf("DU not found for UE: %v", err)
+	}
 	err = duCtx.SendF1ap(f1apBytes)
 	if err != nil {
 		return fmt.Errorf("failed to send UE Context Setup Request: %w", err)
@@ -220,11 +224,10 @@ func (cu *CuCpContext) handleRRCReconfigurationComplete(
 		return fmt.Errorf("failed to encode Initial Context Setup Response: %w", err)
 	}
 
-	// amf, ok := cu.AmfPool.Load(0) //WARN: now fix id amf = 0
-	// if !ok {
-	// 	return fmt.Errorf("cannot load amf")
-	// }
-	amf := cu.AMF
+	amf, err := cu.GetAMFById(ue.AmfId)
+	if err != nil {
+		return fmt.Errorf("AMF not found for UE: %v", err)
+	}
 	err = amf.SendNgap(ngapBytes)
 	if err != nil {
 		return fmt.Errorf("failed to send NGAP Initial Context Setup Response: %w", err)

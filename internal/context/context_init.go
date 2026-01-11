@@ -13,6 +13,10 @@ func InitContext(amfs model.AMF, cfg config.Config) *CuCpContext {
 		IsReadyNgap: make(chan bool),
 		Close:       make(chan struct{}),
 		Ctx:         context.Background(),
+
+		ranUeNgapIdGen:   NewIdGenerator(0),
+		rrcUeIdGen:       NewIdGenerator(0),
+		gnbCuUeF1apIdGen: NewIdGenerator(0),
 	}
 
 	// Set control info from config
@@ -25,7 +29,6 @@ func InitContext(amfs model.AMF, cfg config.Config) *CuCpContext {
 	cuCtx.ControlInfo.mcc = cfg.CUCP.PLMN.MCC
 	cuCtx.ControlInfo.mnc = cfg.CUCP.PLMN.MNC
 	cuCtx.ControlInfo.tac = cfg.CUCP.TAC
-	
 
 	// Set slice info from config
 	if len(cfg.CUCP.Slices) > 0 {

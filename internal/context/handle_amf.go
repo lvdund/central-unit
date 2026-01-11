@@ -23,9 +23,9 @@ func (cu *CuCpContext) newAmf(amfs model.AMF) *amfcontext.GNBAmf {
 		State:   amfcontext.AMF_INACTIVE,
 		Logger:  logger.InitLogger("", map[string]string{"mod": "amf"}),
 	}
+
+	cu.AmfPool.Store(amf.AmfId, amf)
 	cu.Info("==== Store AMF %d ====", amf.AmfId)
-	// cu.AmfPool.Store(amf.AmfId, amf)
-	cu.AMF = amf
 
 	return amf
 }
@@ -127,8 +127,17 @@ func (cu *CuCpContext) handlerNgSetupResponse(amf *amfcontext.GNBAmf, msg *ies.N
 }
 
 func (cu *CuCpContext) handleNgDownlinkNasTransport(amf *amfcontext.GNBAmf, msg *ies.DownlinkNASTransport) {
-	duCtx := cu.DU
-	ue := cu.UE
+	ue, err := cu.GetUEByNgapId(msg.RANUENGAPID)
+	if err != nil {
+		cu.Error("UE not found for RAN-UE-NGAP-ID %d: %v", msg.RANUENGAPID, err)
+		return
+	}
+
+	duCtx, err := cu.GetDUForUE(ue)
+	if err != nil {
+		cu.Error("DU not found for UE (DuId=%d): %v", ue.DuId, err)
+		return
+	}
 
 	ue.AmfUeNgapId = msg.AMFUENGAPID
 
@@ -159,8 +168,8 @@ func (cu *CuCpContext) handleNgDownlinkNasTransport(amf *amfcontext.GNBAmf, msg 
 	}
 
 	f1rrcdl := f1ies.DLRRCMessageTransfer{
-		GNBCUUEF1APID: int64(amf.AmfId),
-		GNBDUUEF1APID: int64(duCtx.DuId),
+		GNBCUUEF1APID: int64(ue.GnbCuUeF1apId),
+		GNBDUUEF1APID: int64(ue.DuUeId),
 		SRBID:         0,
 		RRCContainer:  buf,
 		ExecuteDuplication: &f1ies.ExecuteDuplication{
@@ -232,7 +241,11 @@ func (cu *CuCpContext) handlerInitialContextSetupRequest(amf *amfcontext.GNBAmf,
 	// }
 	// pDUSessionResourceSetupListCxtReq = msg.PDUSessionResourceSetupListCxtReq
 
-	ue := cu.UE
+	ue, err := cu.GetUEByNgapId(msg.RANUENGAPID)
+	if err != nil {
+		cu.Error("UE not found for RAN-UE-NGAP-ID %d: %v", msg.RANUENGAPID, err)
+		return
+	}
 	ue.CreateUeContext(mobilityRestrict, maskedImeisv, allowednssai, &ueSecurityCapabilities)
 
 	// show UE context.

@@ -2,9 +2,6 @@ package context
 
 import (
 	"central-unit/internal/common/logger"
-	"central-unit/internal/context/amfcontext"
-	"central-unit/internal/context/du"
-	"central-unit/internal/context/uecontext"
 	"central-unit/internal/transport"
 	"context"
 	"encoding/hex"
@@ -22,15 +19,17 @@ type CuCpContext struct {
 
 	MsinPool  sync.Map // map[string]*GNBUe, Msin as key
 	RrcUePool sync.Map // map[in64]*GNBUe, RrcUeId as key
-	UE        *uecontext.GNBUe
 	PrUePool  sync.Map // map[in64]*GNBUe, PrUeId as key
 	TeidPool  sync.Map // map[uint32]*GNBUe, downlinkTeid as key
 
-	AmfPool      sync.Map // map[int64]*GNBAmf, AmfId as key
-	AMF          *amfcontext.GNBAmf
-	DuPool       sync.Map // map[int64]*DU, DuId as key
-	DU           *du.GNBDU
-	TempDuConn   *sctp.SCTPConn
+	NgapUePool sync.Map // map[int64]*GNBUe - by RanUeNgapId
+	F1UePool   sync.Map // map[int64]*GNBUe - by GnbCuUeF1apId
+
+	AmfPool sync.Map // map[int64]*GNBAmf, AmfId as key
+	DuPool  sync.Map // map[int64]*DU, DuId as key
+
+	F1ConnMap sync.Map // map[*sctp.SCTPConn]int64 - maps connection to DuId
+
 	F1APListener *sctp.SCTPListener
 	f1apStop     chan struct{}
 
@@ -39,6 +38,10 @@ type CuCpContext struct {
 	IdAmfGenerator int64  // ran amf id
 	TeidGenerator  uint32 // ran UE downlink Teid
 	UeIpGenerator  uint8  // ran ue ip.
+
+	ranUeNgapIdGen   *IdGenerator
+	rrcUeIdGen       *IdGenerator
+	gnbCuUeF1apIdGen *IdGenerator
 
 	// OAI
 	IdRrcUeGenerator int64
@@ -138,15 +141,23 @@ func (cu *CuCpContext) getTacInBytes() []byte {
 }
 
 func (cu *CuCpContext) getRanAmfId() int64 {
-
-	// TODO implement mutex
-
+	cu.Mu.Lock()
+	defer cu.Mu.Unlock()
 	id := cu.IdAmfGenerator
-
-	// increment Amf Id
 	cu.IdAmfGenerator++
-
 	return id
+}
+
+func (cu *CuCpContext) getNextRanUeNgapId() int64 {
+	return cu.ranUeNgapIdGen.Next()
+}
+
+func (cu *CuCpContext) getNextRrcUeId() int64 {
+	return cu.rrcUeIdGen.Next()
+}
+
+func (cu *CuCpContext) getNextGnbCuUeF1apId() int64 {
+	return cu.gnbCuUeF1apIdGen.Next()
 }
 
 // // SetControlInfoFromConfig sets the control information from config values
