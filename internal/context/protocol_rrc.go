@@ -214,6 +214,26 @@ func (cu *CuCpContext) handleRRCReconfigurationComplete(
 ) error {
 	ue.State = uecontext.UE_READY
 
+	// Check if this RRC Reconfiguration Complete is for PDU session establishment
+	hasPduSessions := false
+	for _, pduSession := range ue.PduSessions {
+		if pduSession.State == uecontext.PDU_SESSION_ESTABLISHING {
+			pduSession.State = uecontext.PDU_SESSION_ACTIVE
+			hasPduSessions = true
+			cu.Info("PDU Session ID=%d is now ACTIVE", pduSession.PduSessionId)
+		}
+	}
+
+	// If PDU sessions were established, send PDU Session Resource Setup Response
+	if hasPduSessions {
+		cu.Info("Sending PDU Session Resource Setup Response to AMF")
+		if err := cu.sendPduSessionResourceSetupResponse(ue); err != nil {
+			return fmt.Errorf("failed to send PDU Session Resource Setup Response: %w", err)
+		}
+		return nil
+	}
+
+	// Otherwise, this is Initial Context Setup Response
 	msg := &ngapies.InitialContextSetupResponse{
 		AMFUENGAPID: ue.AmfUeNgapId,
 		RANUENGAPID: ue.RanUeNgapId,

@@ -58,6 +58,10 @@ type GNBUe struct {
 	LenSlice               int
 	UeSecurityCapabilities *ies.UESecurityCapabilities
 	// PduSession             [16]*GnbPDUSession
+
+	// PDU Session Management
+	PduSessions       map[uint8]*PduSessionContext // key: PDU Session ID (1-15)
+	NumActiveSessions uint8
 }
 
 func (ue *GNBUe) CreateUeContext(plmn string, imeisv string, allowednssai []model.Snssai, ueSecurityCapabilities *ies.UESecurityCapabilities) {

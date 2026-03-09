@@ -57,6 +57,15 @@ func (cu *CuCpContext) dispatchF1(rawMsg []byte, conn *sctp.SCTPConn) {
 			} else {
 				cu.Error("Failed to cast UE Context Setup Response")
 			}
+		case ies.ProcedureCode_UEContextModification:
+			cu.Info("Receive UE Context Modification Response from DU")
+			if ueContextModResponse, ok := pdu.Message.Msg.(*ies.UEContextModificationResponse); ok {
+				if err := cu.handleF1UEContextModificationResponse(ueContextModResponse); err != nil {
+					cu.Error("Failed to handle UE Context Modification Response: %v", err)
+				}
+			} else {
+				cu.Error("Failed to cast UE Context Modification Response")
+			}
 		}
 
 	case ies.F1apPduUnsuccessfulOutcome:

@@ -75,6 +75,10 @@ func (cu *CuCpContext) dispatch(amf *amfcontext.GNBAmf, rawMsg []byte) {
 			cu.Info("Receive Initial Context Setup Request")
 			innerMsg := ngapMsg.Message.Msg.(*ies.InitialContextSetupRequest)
 			cu.handlerInitialContextSetupRequest(amf, innerMsg)
+		case ies.ProcedureCode_PDUSessionResourceSetup:
+			cu.Info("Receive PDU Session Resource Setup Request")
+			innerMsg := ngapMsg.Message.Msg.(*ies.PDUSessionResourceSetupRequest)
+			cu.handlePduSessionResourceSetupRequest(amf, innerMsg)
 		default:
 			cu.Warn("Received unknown NgapPduInitiatingMessage ProcedureCode 0x%x", ngapMsg.Message.ProcedureCode.Value)
 		}
