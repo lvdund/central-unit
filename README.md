@@ -1,222 +1,193 @@
-<div align="center">
-
-# 🚀 central-unit
-
-**A Golang implementation of a gNB Central Unit - Control Plane (CU-CP) for 5G Open RAN architecture**
+# central-unit
 
 [![Go Version](https://img.shields.io/badge/Go-1.24.4-blue.svg)](https://golang.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![5G](https://img.shields.io/badge/5G-CU--CP-orange.svg)](https://www.3gpp.org/)
 
----
+## Abstract
 
-*A Golang implementation of a gNB Central Unit - Control Plane (CU-CP) for 5G Open RAN architecture. This project implements an RRC core that orchestrates NGAP (AMF interface), F1AP (DU interface), and E1AP (CU-UP interface) protocols, mirroring the OAI (OpenAirInterface) CU-CP logic flow.*
+This module implements the **gNB Central Unit - Control Plane (CU-CP)** as defined in 3GPP TS 38.401 for 5G NR Open RAN architectures. The CU-CP serves as the control-plane anchor for the gNB, orchestrating radio resource control (RRC) procedures across F1-C, E1, and N2 interfaces.
 
-</div>
+The implementation follows an event-driven architecture with a central RRC task coordinating protocol handlers for NGAP (AMF interface), F1AP (DU interface), and E1AP (CU-UP interface), mirroring the ITTI message-passing paradigm established in OpenAirInterface (OAI).
 
-CU-CP is organized as:
+## System Architecture
 
-- **Central RRC task**: Orchestrates procedures
-- **Protocol tasks**: Handle SCTP and encode/decode
-- **Context storage**: Maintains UE/DU/CU-UP state
-- **Event-driven**: ITTI messages coordinate between tasks
+```
+                    ┌─────────────────────────────────────────┐
+                    │              5G Core Network            │
+                    │                   AMF                   │
+                    └─────────────────┬───────────────────────┘
+                                      │ N2 (NGAP)
+                                      │ SCTP PPID=60
+                    ┌─────────────────▼───────────────────────┐
+                    │                                       │
+                    │           CU-CP (this module)         │
+                    │         ┌───────────────────┐         │
+                    │         │    RRC Task       │         │
+                    │         │  (orchestration)  │         │
+                    │         └────────┬──────────┘         │
+                    │                  │                     │
+                    │    ┌─────────────┼─────────────┐      │
+                    │    │             │             │      │
+                    │ ┌──▼──┐      ┌───▼───┐     ┌───▼───┐  │
+                    │ │NGAP │      │ F1AP  │     │ E1AP  │  │
+                    │ └─────┘      └───────┘     └───────┘  │
+                    └───┬──────────────┬─────────────┬──────┘
+                        │              │             │
+                        │ F1-C         │ E1          │
+                        │ PPID=62      │ PPID=62     │
+                    ┌───▼───┐      ┌───▼───┐         │
+                    │  DU   │      │ CU-UP │         │
+                    └───────┘      └───────┘         │
+```
 
-The RRC task is the core, processing events from F1AP (DU), NGAP (AMF), and E1AP (CU-UP) to manage UE connections and radio resources.
+**Key Architectural Components:**
 
-## Overview
+| Component | Responsibility |
+|-----------|----------------|
+| RRC Task | Central orchestrator for all control-plane procedures |
+| NGAP Handler | N2 interface toward AMF (UE context, NAS transport) |
+| F1AP Handler | F1-C interface toward DU (RRC transfer, F1 setup) |
+| E1AP Handler | E1 interface toward CU-UP (bearer management) |
+| Context Manager | UE, DU, and AMF state maintenance |
+| Transport Layer | SCTP connection management (PPID filtering) |
 
-The CU-CP is the control plane component of a 5G gNB that manages:
-- **UE Context**: RRC state machine, security context, bearer management
-- **DU Management**: F1AP interface for Distributed Unit connections
-- **AMF Communication**: NGAP interface for Access and Mobility Management Function
-- **Protocol Handling**: RRC, NGAP, F1AP message processing and routing
+## Prerequisites
 
-The codebase follows an event-driven architecture with a single-threaded logic loop processing events from transports, targeting scalability for high-throughput control-plane operations.
+### Operating System Requirements
 
-## Requirements
+This implementation requires **SCTP (Stream Control Transmission Protocol)** kernel support:
 
-### Operating System Support
+| Platform | Support Status |
+|----------|---------------|
+| Linux (kernel 2.6+) | Full support |
+| FreeBSD | Full support |
+| macOS | Partial (limitations apply) |
+| Windows | Not supported |
 
-This project requires **SCTP (Stream Control Transmission Protocol)** support, which is available on:
-- Linux (kernel 2.6+)
-- FreeBSD
-- macOS (with limitations)
+### Dependencies
 
-**Note**: SCTP is not natively supported on Windows.
-
-### Ubuntu/Debian Package Installation
-
-Install required SCTP development libraries:
+**Ubuntu/Debian:**
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y libsctp-dev lksctp-tools
 ```
 
-Verify SCTP support:
-```bash
-# Check if SCTP module is loaded
-lsmod | grep sctp
+Verify SCTP module availability:
 
-# If not loaded, load it manually
+```bash
+lsmod | grep sctp
+# If not loaded:
 sudo modprobe sctp
 ```
 
-### Go Version
+### Runtime Requirements
 
-Requires Go 1.24.4 or later.
+- **Go**: 1.24.4 or later
+- **Network**: IP connectivity to AMF and DU endpoints
 
-## Configuration
+## Quick Start
 
-The CU-CP is configured via a YAML file (`config/config.yml`). Here's the configuration structure:
+### Build
 
-### Configuration File Structure
+```bash
+git clone <repository-url>
+cd central-unit
+go mod download
+go build -o cucp ./cmd/main.go
+```
+
+### Configuration
+
+Create a minimal configuration file (see [Configuration Reference](docs/configuration.md) for complete schema):
 
 ```yaml
 cucp:
-  node_id: "0001"              # CU-CP node identifier
-  node_name: "gNB-CU-CP"        # CU-CP node name
+  node_id: "0001"
+  node_name: "gNB-CU-CP"
   plmn:
-    mcc: "999"                  # Mobile Country Code
-    mnc: "70"                   # Mobile Network Code
-    mnc_length: 2               # MNC length (2 or 3 digits)
-  slices:                       # Network Slice Support
-    - sst: "01"                 # Slice/Service Type
-      sd: "010203"              # Slice Differentiator
-  tac: "000001"                 # Tracking Area Code
+    mcc: "999"
+    mnc: "70"
+    mnc_length: 2
 
-f1ap:                           # F1AP interface (CU-CP <-> DU)
-  local_address: "192.168.1.10" # Local IP address for F1AP server
-  local_port: 38472             # Local port for F1AP server
-  sctp:
-    in_streams: 2               # SCTP inbound streams
-    out_streams: 2              # SCTP outbound streams
-  timers:
-    f1_setup_timer: "10s"       # F1 Setup timer duration
+f1ap:
+  local_address: "192.168.1.10"
+  local_port: 38472
 
-e1ap:                           # E1AP interface (CU-CP <-> CU-UP)
-  local_address: "192.168.1.10" # Local IP address for E1AP server
-  local_port: 38462             # Local port for E1AP server
-  sctp:
-    in_streams: 2               # SCTP inbound streams
-    out_streams: 2              # SCTP outbound streams
-
-ngap:                           # NGAP interface (CU-CP <-> AMF)
-  gnb_id: "000001"              # gNB identifier
-  amf_address: "192.168.1.15"   # AMF IP address
-  amf_port: 38412               # AMF port
-  local_address: "192.168.1.10"  # Local IP address for NGAP client
-  local_port: 9487              # Local port for NGAP client
-  sctp:
-    in_streams: 2               # SCTP inbound streams
-    out_streams: 2              # SCTP outbound streams
+ngap:
+  gnb_id: "000001"
+  amf_address: "192.168.1.15"
+  amf_port: 38412
 
 logging:
-  level: "info"                 # Log level: debug, info, warn, error
-  format: "json"                # Log format: json or text
+  level: "info"
+  format: "json"
 ```
 
-### Configuration Parameters
-
-#### CU-CP Section
-- `node_id`: Unique identifier for this CU-CP instance
-- `node_name`: Human-readable name for the CU-CP
-- `plmn`: Public Land Mobile Network configuration
-  - `mcc`: Mobile Country Code (3 digits)
-  - `mnc`: Mobile Network Code (2 or 3 digits)
-  - `mnc_length`: Length of MNC (2 or 3)
-- `slices`: List of supported network slices (S-NSSAI)
-  - `sst`: Slice/Service Type (hex string)
-  - `sd`: Slice Differentiator (hex string, optional)
-- `tac`: Tracking Area Code (hex string)
-
-#### F1AP Section
-- `local_address`: IP address where CU-CP listens for DU connections
-- `local_port`: Port number for F1AP server
-- `sctp`: SCTP stream configuration
-- `timers`: F1AP-specific timer configurations
-
-#### NGAP Section
-- `gnb_id`: gNB identifier (hex string)
-- `amf_address`: AMF server IP address
-- `amf_port`: AMF server port
-- `local_address`: Local IP address for NGAP client connection
-- `local_port`: Local port for NGAP client
-
-#### Logging Section
-- `level`: Logging verbosity level
-- `format`: Output format (json recommended for production)
-
-## Running
-
-### Build and Run
+### Execute
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd central-unit
+# Using default configuration path
+./cucp -config config/config.yml
 
-# Install dependencies
-go mod download
-
-# Run the application
+# Alternative: direct execution
 go run ./cmd/main.go -config config/config.yml
 ```
 
-### Command Line Options
+### Expected Behavior
 
-- `-config`: Path to configuration file (default: `config/config.yml`)
+Upon successful initialization, the CU-CP will:
 
-### Example Run
+1. Load and validate configuration parameters
+2. Initialize the logging subsystem
+3. Instantiate the CU-CP context (UE/DU/AMF maps)
+4. Bind F1AP server on configured endpoint (awaiting DU connections)
+5. Establish NGAP association with AMF
+6. Enter event-processing loop
 
-```bash
-# Using default config path
-go run ./cmd/main.go
+Graceful shutdown is triggered via `SIGINT` (Ctrl+C) or `SIGTERM`.
 
-# Using custom config path
-go run ./cmd/main.go -config /path/to/config.yml
+## Project Structure
+
+```
+central-unit/
+├── cmd/main.go                 # Entry point, signal handling
+├── config/config.yml           # Default configuration
+├── internal/
+│   ├── app/                    # Application lifecycle management
+│   ├── common/                 # Shared utilities (FSM, logger, ASN.1)
+│   ├── context/                # Protocol orchestration core
+│   │   ├── protocol_*.go       # F1AP, NGAP, RRC handlers
+│   │   ├── handle_*.go         # AMF, DU, UE event dispatchers
+│   │   ├── amfcontext/         # AMF connection state
+│   │   ├── du/                 # DU context and F1AP encoding
+│   │   └── uecontext/          # UE state machine, security context
+│   └── transport/              # SCTP server/client implementation
+├── pkg/
+│   ├── config/                 # Configuration parsing and validation
+│   └── model/                  # Shared type definitions
+└── docs/                       # Extended documentation
 ```
 
-The application will:
-1. Load and validate the configuration
-2. Initialize logging
-3. Create CU-CP context
-4. Start F1AP server (listening for DU connections)
-5. Connect to AMF via NGAP
-6. Process incoming messages
+## Documentation
 
-Press `Ctrl+C` to gracefully shutdown the application.
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/architecture.md) | Detailed system architecture, protocol flows, and implementation rationale |
+| [Configuration Reference](docs/configuration.md) | Complete configuration schema with parameter descriptions |
+| [Development Roadmap](docs/roadmap.md) | Current implementation status and planned features |
 
-## Features & Future Works
+## Standards Compliance
 
-### Planned Features
+This implementation references the following 3GPP specifications:
 
-The following features are planned for future releases:
+- **TS 38.401**: NG-RAN Architecture Description
+- **TS 38.413**: NG Application Protocol (NGAP)
+- **TS 38.473**: F1 Application Protocol (F1AP)
+- **TS 38.463**: E1 Application Protocol (E1AP)
+- **TS 38.331**: NR Radio Resource Control (RRC)
 
-1. **E1AP Message Handler**
-   - E1 Setup Request/Response procedures
-   - Bearer Context Setup/Modification/Release
-   - CU-UP connection management
-   - E1AP message encoding/decoding
+## License
 
-2. **Multi-Connection Support**
-   - Multiple DU connections management
-   - Multiple UE context handling
-   - Multiple AMF associations support
-   - Connection pooling and load balancing
-
-3. **Extended Procedures**
-   - **Session Management**: PDU Session Establishment/Modification/Release
-   - **Handover**: Intra-DU, Inter-DU, and Inter-gNB handover procedures
-   - **Paging**: Paging request handling and UE paging
-   - **UE Context Release**: UE context release procedures
-   - **RRC Reestablishment**: RRC connection reestablishment
-   - **RRC Resume**: RRC connection resume procedures
-
-4. **Security Context Support**
-   - Complete 5G-AKA authentication flow
-   - Security key derivation (KgNB, KUPenc, KUPint)
-   - Integrity protection and verification
-   - Ciphering/deciphering of RRC and NAS messages
-   - Security mode command handling
-
+MIT License. See [LICENSE](LICENSE) for details.
